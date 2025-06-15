@@ -2658,9 +2658,37 @@ def predict_grf(opt):
 
         trial_save_path = f'{dataset.file_names[i_trial][:-4]}_pred___.mot'
         convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3))
+        
+# Automated input parser.
+def get_inputs():
+    # To do: takes in data from yaml file, returns relevant inputs.
+    return
+        
+# Kinematic inpainting example usage.
+def inpaint_kinematics(opt):
+    refinement_model = BaselineModel(opt, TransformerEncoderArchitecture)
+    dataset = MotionDataset(opt, normalizer=refinement_model.normalizer)
+    diffusion_model_for_filling = None
+    filling_method = DiffusionFilling()
+    
+    for i_trial in range(len(dataset.trials)):
+        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1)
+        if len(windows) == 0:
+            continue
+
+        if len(windows[0].missing_col) > 0:
+            print(f'File {dataset.file_names[i_trial]} do not have {windows[0].missing_col}. '
+                  f'\nGenerating missing kinematics for {dataset.file_names[i_trial]}')
+            if diffusion_model_for_filling is None:
+                diffusion_model_for_filling, _ = load_diffusion_model(opt)
+            windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling)
+        else:
+            windows_reconstructed = windows
+            
+    return windows_reconstructed
 
 
 
 if __name__ == '__main__':
     opt = usr_inputs()
-    predict_grf(opt)
+    inpaint_kinematics(opt)
