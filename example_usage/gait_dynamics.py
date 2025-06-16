@@ -1,8 +1,9 @@
 # Define functions and run GaitDynamics.
 import numpy as np
 import pandas as pd
+import torch
 from torch.utils.data import Dataset
-import torch.nn.functional as F
+from torch.nn import functional as F
 import torch
 from torch import nn
 from torch import Tensor
@@ -29,6 +30,10 @@ from accelerate.state import AcceleratorState
 torch.manual_seed(0)
 random.seed(0)
 np.random.seed(0)
+
+# Determine local device - should return 'cpu' on MacOS with ARM or 'cuda:0' 
+local_device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+print("Using: " + f"{local_device}")
 
 """ ============================ Start scaler.py ============================ """
 
@@ -802,7 +807,8 @@ class TransformerEncoderArchitecture(nn.Module):
 class DiffusionShellForAdaptingTheOriginalFramework(nn.Module):
     def __init__(self, model):
         super(DiffusionShellForAdaptingTheOriginalFramework, self).__init__()
-        self.device = 'cuda'
+#        self.device = 'cuda'
+        self.device = local_device
         self.model = model
         self.ema = EMA(0.99)
         self.master_model = copy.deepcopy(self.model)
@@ -1351,7 +1357,8 @@ def get_knee_rotation_coefficients():
 
 
 walker_knee_coefficients = get_knee_rotation_coefficients()
-walker_knee_coefficients = torch.tensor(walker_knee_coefficients).to(torch.device('cuda:0'))         # Bugprone
+#walker_knee_coefficients = torch.tensor(walker_knee_coefficients).to(torch.device('cuda:0'))         # Bugprone
+walker_knee_coefficients = torch.tensor(walker_knee_coefficients).to(torch.device(local_device))         # Bugprone
 
 
 def forward_kinematics(pose, offsets, with_arm=False):
@@ -1378,7 +1385,8 @@ def forward_kinematics(pose, offsets, with_arm=False):
     """
     if isinstance(pose, np.ndarray):
         pose = torch.from_numpy(pose)
-    pose = pose.to(torch.device('cuda:0'))      # Error-prone
+#    pose = pose.to(torch.device('cuda:0'))      # Error-prone
+    pose = pose.to(torch.device(local_device))      # Error-prone
     if len(pose.shape) == 2:
         pose = pose[None, ...]
     if len(offsets.shape) == 3:
@@ -2611,6 +2619,49 @@ def usr_inputs():
 
     return opt
 
+def auto_inputs(trial_path, trial_metadata):
+    opt = parse_opt()
+    opt.subject_data_path = trial_path
+    opt.geometry_folder = opt.subject_data_path + '/OpenSimData/Model/Geometry/'
+
+
+    mot_folder = opt.subject_data_path + '/OpenSimData/Kinematics/'
+
+    file_paths = []
+    for file in os.listdir(mot_folder):
+        file_path = os.path.join(opt.subject_data_path, file)
+        if file.endswith(".mot") and '_pred___' not in file:
+            file_paths.append(file_path)
+    if len(file_paths) == 0:
+        raise RuntimeError(f'No .mot file found. Upload .mot files to the appropriate trial directory.')
+    opt.file_paths = file_paths
+
+    osim_folder = opt.subject_data_path + "OpenSimData/Model/"
+
+    osim_paths = []
+    for root, dirs, files in os.walk(osim_folder):
+        for file in files:
+            file_path = os.path.join(root, file)
+            if file.endswith(".osim") and 'example_opensim_model.osim' not in file:
+                osim_paths.append(file_path)
+    if len(osim_paths) > 1:
+        print(f'Multiple .osim files found.')
+        [print(f'{i}: {file_path}') for i, file_path in enumerate(osim_paths)]
+        i_file = int(input(f'Choose the .osim file entering its index (between 0 and {len(osim_paths)-1}): '))
+        opt.subject_osim_model = osim_paths[i_file]
+    elif len(osim_paths) == 0:
+        raise RuntimeError(f'No .osim file found. Upload the .osim file to the appropriate trial directory.')
+    else:
+        opt.subject_osim_model = osim_paths[0]
+
+    opt.height_m = trial_metadata["height_m"]
+
+    opt.weight_kg = trial_metadata["weight_kg"]
+
+    opt.treadmill_speed = 0.0
+
+    print()
+
 
 def predict_grf(opt):
     refinement_model = BaselineModel(opt, TransformerEncoderArchitecture)
@@ -2688,7 +2739,9 @@ def inpaint_kinematics(opt):
     return windows_reconstructed
 
 
-
+"""
 if __name__ == '__main__':
+    trial_path = ""
     opt = usr_inputs()
     inpaint_kinematics(opt)
+"""
