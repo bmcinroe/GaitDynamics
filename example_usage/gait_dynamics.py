@@ -2621,22 +2621,24 @@ def usr_inputs():
 
 def auto_inputs(trial_path, trial_metadata):
     opt = parse_opt()
+    # Ensure subject_data_path is a string
+    if not isinstance(trial_path, str):
+        trial_path = str(trial_path)
     opt.subject_data_path = trial_path
     opt.geometry_folder = opt.subject_data_path + '/OpenSimData/Model/Geometry/'
-
 
     mot_folder = opt.subject_data_path + '/OpenSimData/Kinematics/'
 
     file_paths = []
     for file in os.listdir(mot_folder):
-        file_path = os.path.join(opt.subject_data_path, file)
+        file_path = os.path.join(mot_folder, file)
         if file.endswith(".mot") and '_pred___' not in file:
             file_paths.append(file_path)
     if len(file_paths) == 0:
         raise RuntimeError(f'No .mot file found. Upload .mot files to the appropriate trial directory.')
     opt.file_paths = file_paths
 
-    osim_folder = opt.subject_data_path + "OpenSimData/Model/"
+    osim_folder = opt.subject_data_path + "/OpenSimData/Model/"
 
     osim_paths = []
     for root, dirs, files in os.walk(osim_folder):
@@ -2656,14 +2658,14 @@ def auto_inputs(trial_path, trial_metadata):
 
     opt.height_m = trial_metadata["height_m"]
 
-    opt.weight_kg = trial_metadata["weight_kg"]
+    opt.weight_kg = trial_metadata["mass_kg"]
 
     opt.treadmill_speed = 0.0
 
-    print()
+    return opt
 
 
-def predict_grf(opt):
+def predict_grf(opt, trial_output_path):
     refinement_model = BaselineModel(opt, TransformerEncoderArchitecture)
     dataset = MotionDataset(opt, normalizer=refinement_model.normalizer)
     diffusion_model_for_filling = None
@@ -2707,13 +2709,9 @@ def predict_grf(opt):
         results_pred[:, -6:-3] = results_pred[:, -6:-3] * opt.weight_kg  # convert to N
         df = pd.DataFrame(results_pred, columns=opt.osim_dof_columns)
 
-        trial_save_path = f'{dataset.file_names[i_trial][:-4]}_pred___.mot'
+        trial_save_path = f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.mot'
         convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3))
         
-# Automated input parser.
-def get_inputs():
-    # To do: takes in data from yaml file, returns relevant inputs.
-    return
         
 # Kinematic inpainting example usage.
 def inpaint_kinematics(opt):
