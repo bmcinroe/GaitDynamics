@@ -1205,7 +1205,8 @@ class BaselineModel:
 
 
 def load_diffusion_model(opt):
-    opt.checkpoint = opt.subject_data_path + '/GaitDynamics/example_usage/GaitDynamicsDiffusion.pt'
+    # Modified to handle cases where the working folder is not the same as the subject_data_path.
+    opt.checkpoint = opt.working_folder + '/GaitDynamics/example_usage/GaitDynamicsDiffusion.pt'
     model = MotionModel(opt)
     model_key = 'diffusion'
     return model, model_key
@@ -2320,6 +2321,8 @@ def parse_opt():
     opt = parser.parse_args(args=[])
     set_no_arm_opt(opt)
     current_folder = os.getcwd()
+    # Make a new attribute for the working folder. TODO: make the separation between the working folder and the subject_data_path more explicit.
+    opt.working_folder = current_folder
     opt.subject_data_path = current_folder
     opt.geometry_folder = current_folder + '/Geometry/'
     opt.checkpoint_bl = current_folder + '/GaitDynamics/example_usage/GaitDynamicsRefinement.pt'
@@ -2444,21 +2447,26 @@ class MotionDataset(Dataset):
         self.trials, self.file_names = [], []
         for i_file, file_path in enumerate(file_paths):
             model_offsets = get_model_offsets(skel).float()
-            poses_df = pd.read_csv(file_path, sep='\t', skiprows=10)
+            # TODO: 'skiprows' is hardcoded to match balance data. For GaitDynamics, this should be 10. Make this more flexible.
+            poses_df = pd.read_csv(file_path, sep='\t', skiprows=12)
             with open(file_path) as f:
-                for _ in range(10):
+                # TODO: Hardcoded for BalanceData, 'inDegrees' logic is broken.
+                angle_scale = np.pi / 180
+                # TODO: range limit is hardcoded to match balance data. Check the case in 'inDegrees' logic.
+                """
+                for _ in range(12):
                     header = f.readline()
                     if 'inDegrees' in header:
-                        if 'yes' in header and 'no' not in header:
+                        if 'Yes' in header and 'No' not in header:
                             angle_scale = np.pi / 180
-                        elif 'no' in header and 'yes' not in header:
+                        elif 'No' in header and 'Yes' not in header:
                             angle_scale = 1
                         else:
                             raise ValueError('No inDegrees keyword in the header, cannot determine the unit of angles. '
                                              'Here is an example header: \nCoordinates\nversion=1\nnRows=1380'
                                              '\nnColumns=26\ninDegrees=yes\n')
                         break
-
+                """
             if 'time' not in poses_df.columns:
                 raise ValueError(f'{file_path} does not have time column. Necessary for compuing sampling rate')
             sampling_rate = round((poses_df.shape[0] - 1) / (poses_df['time'].iloc[-1] - poses_df['time'].iloc[0]))
@@ -2735,6 +2743,49 @@ def inpaint_kinematics(opt):
             windows_reconstructed = windows
             
     return windows_reconstructed
+
+def inpaint_kinematics_only(opt, trial_output_path):
+    refinement_model = BaselineModel(opt, TransformerEncoderArchitecture)
+    dataset = MotionDataset(opt, normalizer=refinement_model.normalizer)
+    diffusion_model_for_filling = None
+    filling_method = DiffusionFilling()
+    inpainted_results = []
+
+    for i_trial in range(len(dataset.trials)):
+        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1)
+        if len(windows) == 0:
+            continue
+
+        # Inpainting step
+        if len(windows[0].missing_col) > 0:
+            print(f'File {dataset.file_names[i_trial]} do not have {windows[0].missing_col}. '
+                  f'\nGenerating missing kinematics for {dataset.file_names[i_trial]}')
+            if diffusion_model_for_filling is None:
+                diffusion_model_for_filling, _ = load_diffusion_model(opt)
+            windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling)
+        else:
+            windows_reconstructed = windows
+
+        # Reconstruct the full trial from overlapping windows
+        state_pred_list = []
+        for i_win in range(0, len(windows), opt.batch_size_inference):
+            state_true = torch.stack([win.pose for win in windows_reconstructed[i_win:i_win+opt.batch_size_inference]])
+            state_pred_list.append(state_true)
+
+        state_pred = torch.cat(state_pred_list, dim=0)
+        trial_len = dataset.trials[i_trial].converted_pose.shape[0]
+
+        # Merge overlapping windows (median)
+        results_pred, _ = convert_overlapped_list_to_array(
+            trial_len, state_pred, s_list, e_list)
+
+        # Convert to DataFrame with appropriate column names
+        df = pd.DataFrame(results_pred, columns=opt.model_states_column_names)
+        inpainted_results.append(df)
+
+        trial_save_path = f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.mot'
+        convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3))
+
 
 
 """
