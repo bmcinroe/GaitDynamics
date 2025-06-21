@@ -1227,7 +1227,7 @@ class SinusoidalPosEmb(nn.Module):
         return emb
 
 
-def convertDfToGRFMot(df, out_folder, dt, max_time=None):
+def convertDfToGRFMot(df, out_folder, dt, time_column):
     numFrames = df.shape[0]
     for key in df.keys():
         if key == 'TimeStamp':
@@ -1257,7 +1257,7 @@ def convertDfToGRFMot(df, out_folder, dt, max_time=None):
 
     out_file.write('\n')
     for i in range(numFrames):
-        out_file.write(str(round(dt * i, 5)))
+        out_file.write(str(round(dt * i + time_column[0], 5)))
         for side in ['r', 'l']:
             out_file.write('\t' + str(df[f'calcn_{side}_force_vx'][i]))
             out_file.write('\t' + str(df[f'calcn_{side}_force_vy'][i]))
@@ -2085,6 +2085,47 @@ def inverse_norm_cops(skel, states, opt, sub_mass, height_m, grf_thd_to_zero_cop
     return states
 
 
+def inverse_align_moving_direction(results_pred, column_names, rot_mat):
+    # Added in Tian's update to colab notebook
+    if isinstance(results_pred, np.ndarray):
+        poses = torch.from_numpy(results_pred)
+    results_pred_clone = poses.clone().float()
+    pelvis_orientation_col_loc = [column_names.index(col) for col in JOINTS_3D_ALL['pelvis']]
+    p_pos_col_loc = [column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
+    r_grf_col_loc = [column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
+    l_grf_col_loc = [column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
+    r_cop_col_loc = [column_names.index(col) for col in [f'calcn_r_force_normed_cop_{x}' for x in ['x', 'y', 'z']]]
+    l_cop_col_loc = [column_names.index(col) for col in [f'calcn_l_force_normed_cop_{x}' for x in ['x', 'y', 'z']]]
+
+    if len(pelvis_orientation_col_loc) != 3 or len(p_pos_col_loc) != 3 or len(r_grf_col_loc) != 3 or len(
+            l_grf_col_loc) != 3:
+        raise ValueError('check column names')
+
+    pelvis_orientation = results_pred_clone[:, pelvis_orientation_col_loc]
+    pelvis_orientation = euler_angles_to_matrix(pelvis_orientation, "ZXY")
+    p_pos = results_pred_clone[:, p_pos_col_loc]
+    r_grf = results_pred_clone[:, r_grf_col_loc]
+    l_grf = results_pred_clone[:, l_grf_col_loc]
+    r_cop = results_pred_clone[:, r_cop_col_loc]
+    l_cop = results_pred_clone[:, l_cop_col_loc]
+
+    rot_mat = rot_mat.T
+
+    pelvis_orientation_rotated = torch.matmul(rot_mat, pelvis_orientation)
+    p_pos_rotated = torch.matmul(rot_mat, p_pos.unsqueeze(2)).squeeze(2)
+    r_grf_rotated = torch.matmul(rot_mat, r_grf.unsqueeze(2)).squeeze(2)
+    l_grf_rotated = torch.matmul(rot_mat, l_grf.unsqueeze(2)).squeeze(2)
+    r_cop_rotated = torch.matmul(rot_mat, r_cop.unsqueeze(2)).squeeze(2)
+    l_cop_rotated = torch.matmul(rot_mat, l_cop.unsqueeze(2)).squeeze(2)
+
+    results_pred_clone[:, pelvis_orientation_col_loc] = matrix_to_euler_angles(pelvis_orientation_rotated.float(), "ZXY")
+    results_pred_clone[:, p_pos_col_loc] = p_pos_rotated.float()
+    results_pred_clone[:, r_grf_col_loc] = r_grf_rotated.float()
+    results_pred_clone[:, l_grf_col_loc] = l_grf_rotated.float()
+    results_pred_clone[:, r_cop_col_loc] = r_cop_rotated.float()
+    results_pred_clone[:, l_cop_col_loc] = l_cop_rotated.float()
+    return results_pred_clone
+
 def convert_addb_state_to_model_input(pose_df, joints_3d, sampling_fre):
     # shift root position to start in (x,y) = (0,0)
     pos_vec = [pose_df['pelvis_tx'][0], pose_df['pelvis_ty'][0], pose_df['pelvis_tz'][0]]
@@ -2122,12 +2163,15 @@ def convert_addb_state_to_model_input(pose_df, joints_3d, sampling_fre):
     return pose_vel_df, pos_vec
 
 
-def inverse_convert_addb_state_to_model_input(model_states, model_states_column_names, joints_3d, osim_dof_columns, pos_vec, height_m, sampling_fre=100):
+def inverse_convert_addb_state_to_model_input(
+        model_states, model_states_column_names, treadmill_speed, joints_3d, osim_dof_columns, pos_vec, height_m, sampling_fre=100):
     model_states_dict = {col: model_states[..., i] for i, col in enumerate(model_states_column_names) if
                          col in osim_dof_columns}
 
     for i_col, col in enumerate(['pelvis_tx', 'pelvis_ty', 'pelvis_tz']):
         model_states_dict[col] = model_states_dict[col] * height_m.unsqueeze(-1).expand(model_states_dict[col].shape)
+        if col == 'pelvis_tx':
+            model_states_dict[col] -= treadmill_speed
         model_states_dict[col] = torch.cumsum(model_states_dict[col], dim=-1) / sampling_fre
 
     # convert 6v to euler
@@ -2363,7 +2407,7 @@ class MotionDataset(Dataset):
     def __init__(
             self,
             opt,
-            align_moving_direction_flag: bool = True,
+            #align_moving_direction_flag: bool = True,
             normalizer: Any = None,
             max_trial_num=None,
             check_cop_to_calcn_distance=True,
@@ -2374,7 +2418,7 @@ class MotionDataset(Dataset):
             raise ValueError('100 Hz sampling rate is not confirmed. Confirm by setting opt.target_sampling_rate = 100')
         self.target_sampling_rate = opt.target_sampling_rate
         self.window_len = opt.window_len
-        self.align_moving_direction_flag = align_moving_direction_flag
+        #self.align_moving_direction_flag = align_moving_direction_flag
         self.opt = opt
         self.check_cop_to_calcn_distance = check_cop_to_calcn_distance
         self.skel = None
@@ -2419,6 +2463,10 @@ class MotionDataset(Dataset):
         windows, s_list, e_list = [], [], []
         for i_trial in range(start_trial, end_trial):
             trial_ = self.trials[i_trial]
+            col_loc_to_unmask_trial = copy.deepcopy(col_loc_to_unmask)
+            for col in trial_.missing_col:
+                col_index = opt.model_states_column_names.index(col)
+                col_loc_to_unmask_trial.remove(col_index)
             trial_len = trial_.converted_pose.shape[0]
             if including_shorter_than_window_len:
                 e_of_trial = trial_len
@@ -2430,7 +2478,7 @@ class MotionDataset(Dataset):
                 s_list.append(s)
                 e_list.append(e)
                 mask = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
-                mask[:, col_loc_to_unmask] = 1
+                mask[:, col_loc_to_unmask_trial] = 1
                 mask[e-s:, :] = 0
                 data_ = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
                 data_[:e-s] = trial_.converted_pose[s:e, ...]
@@ -2444,7 +2492,7 @@ class MotionDataset(Dataset):
         skel = customOsim.skeleton
         self.skel = skel
 
-        self.trials, self.file_names = [], []
+        self.trials, self.file_names, self.rot_mat_trials, self.time_column = [], [], [], []
         for i_file, file_path in enumerate(file_paths):
             model_offsets = get_model_offsets(skel).float()
             # TODO: 'skiprows' is hardcoded to match balance data. For GaitDynamics, this should be 10. Make this more flexible.
@@ -2470,6 +2518,7 @@ class MotionDataset(Dataset):
             if 'time' not in poses_df.columns:
                 raise ValueError(f'{file_path} does not have time column. Necessary for compuing sampling rate')
             sampling_rate = round((poses_df.shape[0] - 1) / (poses_df['time'].iloc[-1] - poses_df['time'].iloc[0]))
+            self.time_column.append(poses_df['time'])
 
             missing_col = []
             for col in FULL_OSIM_DOF:
@@ -2489,15 +2538,13 @@ class MotionDataset(Dataset):
             if not self.is_lumbar_rotation_reasonable(np.array(states), opt.osim_dof_columns):
                 Warning(f'Warning: {file_path} has unreasonable lumbar rotation, don\'t trust this trial.')
 
-            if self.align_moving_direction_flag:
-                states_aligned, rot_mat = align_moving_direction(states, opt.osim_dof_columns)
-                if states_aligned is False:
-                    print(f'Warning: {file_path} Pelvis orientation changed by more than 45 deg, don\'t trust this trial')
-                    rot_mat = torch.eye(3).float()
-                else:
-                    states = states_aligned
-            else:
+            states_aligned, rot_mat = align_moving_direction(states, opt.osim_dof_columns)
+            if states_aligned is False:
+                print(f'Warning: {file_path} Pelvis orientation changed by more than 45 deg, don\'t trust this trial')
                 rot_mat = torch.eye(3).float()
+            else:
+                states = states_aligned
+            self.rot_mat_trials.append(rot_mat)
 
             file_name = file_path.split('/')[-1]
             if states.shape[0] / sampling_rate * self.target_sampling_rate < self.window_len + 2:
@@ -2553,7 +2600,7 @@ class TrialData:
         self.missing_col = missing_col
 
 
-""" ============================ End args.py ============================ """
+""" ============================ End dataset.py ============================ """
 
 
 def usr_inputs():
@@ -2709,16 +2756,18 @@ def predict_grf(opt, trial_output_path):
 
         height_m_tensor = torch.tensor([windows[0].height_m])
         results_pred = inverse_convert_addb_state_to_model_input(
-            torch.from_numpy(results_pred).unsqueeze(0), opt.model_states_column_names,
+            torch.from_numpy(results_pred).unsqueeze(0), opt.model_states_column_names, opt.treadmill_speed,
             opt.joints_3d, opt.osim_dof_columns, dataset.trials[i_trial].pos_vec_for_pos_alignment, height_m_tensor)[0].numpy()
         results_pred = inverse_norm_cops(dataset.skel, results_pred, opt, windows[0].weight_kg, windows[0].height_m)
+        results_pred = inverse_align_moving_direction(results_pred, opt.osim_dof_columns, dataset.rot_mat_trials[i_trial])
 
         results_pred[:, -12:-9] = results_pred[:, -12:-9] * opt.weight_kg  # convert to N
         results_pred[:, -6:-3] = results_pred[:, -6:-3] * opt.weight_kg  # convert to N
         df = pd.DataFrame(results_pred, columns=opt.osim_dof_columns)
 
         trial_save_path = f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.mot'
-        convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3))
+        df.to_csv(f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.csv', index=False)
+        #convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
         
         
 # Kinematic inpainting example usage.
