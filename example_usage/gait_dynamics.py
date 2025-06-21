@@ -538,15 +538,15 @@ class GaussianDiffusion(nn.Module):
 
 
 class FillingBase:
-    def fill_param(self, windows, diffusion_model_for_filling):
-        return self.filling(windows, diffusion_model_for_filling, self.update_kinematics_and_masks_for_masking_column)
+    def fill_param(self, windows, diffusion_model_for_filling, opt):
+        return self.filling(windows, diffusion_model_for_filling, self.update_kinematics_and_masks_for_masking_column, opt)
 
-    def fill_temporal(self, windows, diffusion_model_for_filling, mask_original):
+    def fill_temporal(self, windows, diffusion_model_for_filling, mask_original, opt):
         self.mask_original = mask_original
-        return self.filling(windows, diffusion_model_for_filling, self.update_kinematics_and_masks_for_masking_temporal)
+        return self.filling(windows, diffusion_model_for_filling, self.update_kinematics_and_masks_for_masking_temporal, opt)
 
     @staticmethod
-    def update_kinematics_and_masks_for_masking_column(windows, samples, i_win, masks):
+    def update_kinematics_and_masks_for_masking_column(windows, samples, i_win, masks, opt):
         unmasked_samples_in_temporal_dim = (masks.sum(axis=2)).bool()
         for j_win in range(len(samples)):
             windows[j_win+i_win].pose = samples[j_win]
@@ -556,7 +556,7 @@ class FillingBase:
             windows[j_win+i_win].mask = updated_mask
         return windows
 
-    def update_kinematics_and_masks_for_masking_temporal(self, windows, samples, i_win, masks):
+    def update_kinematics_and_masks_for_masking_temporal(self, windows, samples, i_win, masks, opt):
         for j_win in range(len(samples)):
             windows[j_win+i_win].pose = samples[j_win]
             windows[j_win+i_win].mask = self.mask_original[j_win+i_win]
@@ -569,7 +569,7 @@ class FillingBase:
 
 class DiffusionFilling(FillingBase):
     @staticmethod
-    def filling(windows, diffusion_model_for_filling, windows_update_func):
+    def filling(windows, diffusion_model_for_filling, windows_update_func, opt):
         windows = copy.deepcopy(windows)
         for i_win in range(0, len(windows), opt.batch_size_inference):
             state_true = torch.stack([win.pose for win in windows[i_win:i_win+opt.batch_size_inference]])
@@ -582,7 +582,7 @@ class DiffusionFilling(FillingBase):
             samples = state_true * masks + (1.0 - masks) * samples.to(state_true.device)
             # samples[:, :, opt.kinetic_diffusion_col_loc] = state_true[:, :, opt.kinetic_diffusion_col_loc]
 
-            windows = windows_update_func(windows, samples, i_win, masks)
+            windows = windows_update_func(windows, samples, i_win, masks, opt)
         return windows
 
     def __str__(self):
@@ -2457,7 +2457,7 @@ class MotionDataset(Dataset):
     def __len__(self):
         return self.opt.pseudo_dataset_len
 
-    def get_overlapping_wins(self, col_loc_to_unmask, step_len, start_trial=0, end_trial=None, including_shorter_than_window_len=False):
+    def get_overlapping_wins(self, col_loc_to_unmask, step_len, start_trial=0, end_trial=None, including_shorter_than_window_len=False, opt=None):
         if end_trial is None:
             end_trial = len(self.trials)
         windows, s_list, e_list = [], [], []
@@ -2726,7 +2726,7 @@ def predict_grf(opt, trial_output_path):
     diffusion_model_for_filling = None
     filling_method = DiffusionFilling()
     for i_trial in range(len(dataset.trials)):
-        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1)
+        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1, opt=opt)
         if len(windows) == 0:
             continue
 
@@ -2735,7 +2735,7 @@ def predict_grf(opt, trial_output_path):
                   f'\nGenerating missing kinematics for {dataset.file_names[i_trial]}')
             if diffusion_model_for_filling is None:
                 diffusion_model_for_filling, _ = load_diffusion_model(opt)
-            windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling)
+            windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling, opt)
         else:
             windows_reconstructed = windows
 
@@ -2778,7 +2778,7 @@ def inpaint_kinematics(opt):
     filling_method = DiffusionFilling()
     
     for i_trial in range(len(dataset.trials)):
-        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1)
+        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1, opt=opt)
         if len(windows) == 0:
             continue
 
@@ -2787,7 +2787,7 @@ def inpaint_kinematics(opt):
                   f'\nGenerating missing kinematics for {dataset.file_names[i_trial]}')
             if diffusion_model_for_filling is None:
                 diffusion_model_for_filling, _ = load_diffusion_model(opt)
-            windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling)
+            windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling, opt)
         else:
             windows_reconstructed = windows
             
@@ -2801,7 +2801,7 @@ def inpaint_kinematics_only(opt, trial_output_path):
     inpainted_results = []
 
     for i_trial in range(len(dataset.trials)):
-        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1)
+        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1, opt=opt)
         if len(windows) == 0:
             continue
 
@@ -2811,7 +2811,7 @@ def inpaint_kinematics_only(opt, trial_output_path):
                   f'\nGenerating missing kinematics for {dataset.file_names[i_trial]}')
             if diffusion_model_for_filling is None:
                 diffusion_model_for_filling, _ = load_diffusion_model(opt)
-            windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling)
+            windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling, opt)
         else:
             windows_reconstructed = windows
 
