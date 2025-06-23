@@ -1,9 +1,8 @@
 # Define functions and run GaitDynamics.
 import numpy as np
 import pandas as pd
-import torch
 from torch.utils.data import Dataset
-from torch.nn import functional as F
+import torch.nn.functional as F
 import torch
 from torch import nn
 from torch import Tensor
@@ -538,15 +537,11 @@ class GaussianDiffusion(nn.Module):
 
 
 class FillingBase:
-    def fill_param(self, windows, diffusion_model_for_filling, opt):
-        return self.filling(windows, diffusion_model_for_filling, self.update_kinematics_and_masks_for_masking_column, opt)
-
-    def fill_temporal(self, windows, diffusion_model_for_filling, mask_original, opt):
-        self.mask_original = mask_original
-        return self.filling(windows, diffusion_model_for_filling, self.update_kinematics_and_masks_for_masking_temporal, opt)
+    def fill_param(self, windows, diffusion_model_for_filling):
+        return self.filling(windows, diffusion_model_for_filling, self.update_kinematics_and_masks_for_masking_column)
 
     @staticmethod
-    def update_kinematics_and_masks_for_masking_column(windows, samples, i_win, masks, opt):
+    def update_kinematics_and_masks_for_masking_column(windows, samples, i_win, masks):
         unmasked_samples_in_temporal_dim = (masks.sum(axis=2)).bool()
         for j_win in range(len(samples)):
             windows[j_win+i_win].pose = samples[j_win]
@@ -556,7 +551,7 @@ class FillingBase:
             windows[j_win+i_win].mask = updated_mask
         return windows
 
-    def update_kinematics_and_masks_for_masking_temporal(self, windows, samples, i_win, masks, opt):
+    def update_kinematics_and_masks_for_masking_temporal(self, windows, samples, i_win, masks):
         for j_win in range(len(samples)):
             windows[j_win+i_win].pose = samples[j_win]
             windows[j_win+i_win].mask = self.mask_original[j_win+i_win]
@@ -569,7 +564,7 @@ class FillingBase:
 
 class DiffusionFilling(FillingBase):
     @staticmethod
-    def filling(windows, diffusion_model_for_filling, windows_update_func, opt):
+    def filling(windows, diffusion_model_for_filling, windows_update_func):
         windows = copy.deepcopy(windows)
         for i_win in range(0, len(windows), opt.batch_size_inference):
             state_true = torch.stack([win.pose for win in windows[i_win:i_win+opt.batch_size_inference]])
@@ -582,7 +577,7 @@ class DiffusionFilling(FillingBase):
             samples = state_true * masks + (1.0 - masks) * samples.to(state_true.device)
             # samples[:, :, opt.kinetic_diffusion_col_loc] = state_true[:, :, opt.kinetic_diffusion_col_loc]
 
-            windows = windows_update_func(windows, samples, i_win, masks, opt)
+            windows = windows_update_func(windows, samples, i_win, masks)
         return windows
 
     def __str__(self):
@@ -807,8 +802,7 @@ class TransformerEncoderArchitecture(nn.Module):
 class DiffusionShellForAdaptingTheOriginalFramework(nn.Module):
     def __init__(self, model):
         super(DiffusionShellForAdaptingTheOriginalFramework, self).__init__()
-#        self.device = 'cuda'
-        self.device = local_device
+        self.device = 'cuda'
         self.model = model
         self.ema = EMA(0.99)
         self.master_model = copy.deepcopy(self.model)
@@ -1205,8 +1199,7 @@ class BaselineModel:
 
 
 def load_diffusion_model(opt):
-    # Modified to handle cases where the working folder is not the same as the subject_data_path.
-    opt.checkpoint = opt.working_folder + '/GaitDynamics/example_usage/GaitDynamicsDiffusion.pt'
+    opt.checkpoint = opt.subject_data_path + '/GaitDynamicsDiffusion.pt'
     model = MotionModel(opt)
     model_key = 'diffusion'
     return model, model_key
@@ -1225,40 +1218,6 @@ class SinusoidalPosEmb(nn.Module):
         emb = x[:, None] * emb[None, :]
         emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
         return emb
-
-
-def convertDfToKinematicsMot(df, out_folder, dt, time_column):
-    numFrames = df.shape[0]
-    for key in df.keys():
-        if key == 'TimeStamp':
-            continue
-
-    out_file = open(out_folder, 'w')
-    out_file.write('nColumns=1\n')
-    out_file.write('nRows='+str(numFrames)+'\n')
-    out_file.write('DataType=double\n')
-    out_file.write('version=3\n')
-    out_file.write('OpenSimVersion=4.1\n')
-    out_file.write('endheader\n')
-    out_file.write('time')
-
-    #TODO: make this flexible by including a dynamic variable for masked columns
-    out_file.write('\t' + f'knee_angle_r')
-
-    out_file.write('\n')
-    for i in range(numFrames):
-        out_file.write(str(round(dt * i + time_column[0], 5)))
-
-        out_file.write('\t' + str(df[f'knee_angle_r'][i]))
-
-        out_file.write('\n')
-
-    out_file.close()
-
-    print('Kinematics file exported to ' + out_folder)
-            
-            
-            
 
 
 def convertDfToGRFMot(df, out_folder, dt, time_column):
@@ -1305,6 +1264,7 @@ def convertDfToGRFMot(df, out_folder, dt, time_column):
         out_file.write('\n')
     out_file.close()
     print('GRF file exported to ' + out_folder)
+    print('You can now download the file from the default folder.')
 
 
 def rotation_6d_to_matrix(d6: torch.Tensor) -> torch.Tensor:
@@ -1392,7 +1352,6 @@ def get_knee_rotation_coefficients():
 
 
 walker_knee_coefficients = get_knee_rotation_coefficients()
-#walker_knee_coefficients = torch.tensor(walker_knee_coefficients).to(torch.device('cuda:0'))         # Bugprone
 walker_knee_coefficients = torch.tensor(walker_knee_coefficients).to(torch.device(local_device))         # Bugprone
 
 
@@ -1420,7 +1379,6 @@ def forward_kinematics(pose, offsets, with_arm=False):
     """
     if isinstance(pose, np.ndarray):
         pose = torch.from_numpy(pose)
-#    pose = pose.to(torch.device('cuda:0'))      # Error-prone
     pose = pose.to(torch.device(local_device))      # Error-prone
     if len(pose.shape) == 2:
         pose = pose[None, ...]
@@ -2120,7 +2078,6 @@ def inverse_norm_cops(skel, states, opt, sub_mass, height_m, grf_thd_to_zero_cop
 
 
 def inverse_align_moving_direction(results_pred, column_names, rot_mat):
-    # Added in Tian's update to colab notebook
     if isinstance(results_pred, np.ndarray):
         poses = torch.from_numpy(results_pred)
     results_pred_clone = poses.clone().float()
@@ -2159,6 +2116,7 @@ def inverse_align_moving_direction(results_pred, column_names, rot_mat):
     results_pred_clone[:, r_cop_col_loc] = r_cop_rotated.float()
     results_pred_clone[:, l_cop_col_loc] = l_cop_rotated.float()
     return results_pred_clone
+
 
 def convert_addb_state_to_model_input(pose_df, joints_3d, sampling_fre):
     # shift root position to start in (x,y) = (0,0)
@@ -2399,11 +2357,9 @@ def parse_opt():
     opt = parser.parse_args(args=[])
     set_no_arm_opt(opt)
     current_folder = os.getcwd()
-    # Make a new attribute for the working folder. TODO: make the separation between the working folder and the subject_data_path more explicit.
-    opt.working_folder = current_folder
     opt.subject_data_path = current_folder
     opt.geometry_folder = current_folder + '/Geometry/'
-    opt.checkpoint_bl = current_folder + '/GaitDynamics/example_usage/GaitDynamicsRefinement.pt'
+    opt.checkpoint_bl = current_folder + '/GaitDynamicsRefinement.pt'
     return opt
 
 
@@ -2431,8 +2387,6 @@ def set_no_arm_opt(opt):
     opt.cop_osim_col_loc = [i_col for i_col, col in enumerate(opt.osim_dof_columns) if '_cop_' in col]
     opt.kinematic_osim_col_loc = [i_col for i_col, col in enumerate(opt.osim_dof_columns) if 'force' not in col]
 
-""" ============================ End args.py ============================ """
-
 
 """ ============================ Start dataset.py ============================ """
 
@@ -2441,7 +2395,6 @@ class MotionDataset(Dataset):
     def __init__(
             self,
             opt,
-            #align_moving_direction_flag: bool = True,
             normalizer: Any = None,
             max_trial_num=None,
             check_cop_to_calcn_distance=True,
@@ -2452,7 +2405,6 @@ class MotionDataset(Dataset):
             raise ValueError('100 Hz sampling rate is not confirmed. Confirm by setting opt.target_sampling_rate = 100')
         self.target_sampling_rate = opt.target_sampling_rate
         self.window_len = opt.window_len
-        #self.align_moving_direction_flag = align_moving_direction_flag
         self.opt = opt
         self.check_cop_to_calcn_distance = check_cop_to_calcn_distance
         self.skel = None
@@ -2491,7 +2443,7 @@ class MotionDataset(Dataset):
     def __len__(self):
         return self.opt.pseudo_dataset_len
 
-    def get_overlapping_wins(self, col_loc_to_unmask, step_len, start_trial=0, end_trial=None, including_shorter_than_window_len=False, opt=None):
+    def get_overlapping_wins(self, col_loc_to_unmask, step_len, start_trial=0, end_trial=None, including_shorter_than_window_len=False):
         if end_trial is None:
             end_trial = len(self.trials)
         windows, s_list, e_list = [], [], []
@@ -2529,26 +2481,21 @@ class MotionDataset(Dataset):
         self.trials, self.file_names, self.rot_mat_trials, self.time_column = [], [], [], []
         for i_file, file_path in enumerate(file_paths):
             model_offsets = get_model_offsets(skel).float()
-            # TODO: 'skiprows' is hardcoded to match balance data, with value 12. For GaitDynamics, this should be 10. Make this more flexible.
             poses_df = pd.read_csv(file_path, sep='\t', skiprows=10)
             with open(file_path) as f:
-                # TODO: Hardcoded for BalanceData, 'inDegrees' logic is broken.
-                angle_scale = np.pi / 180
-                # TODO: range limit is hardcoded to match balance data. Check the case in 'inDegrees' logic.
-                """
-                for _ in range(12):
+                for _ in range(10):
                     header = f.readline()
                     if 'inDegrees' in header:
-                        if 'Yes' in header and 'No' not in header:
+                        if 'yes' in header and 'no' not in header:
                             angle_scale = np.pi / 180
-                        elif 'No' in header and 'Yes' not in header:
+                        elif 'no' in header and 'yes' not in header:
                             angle_scale = 1
                         else:
                             raise ValueError('No inDegrees keyword in the header, cannot determine the unit of angles. '
                                              'Here is an example header: \nCoordinates\nversion=1\nnRows=1380'
                                              '\nnColumns=26\ninDegrees=yes\n')
                         break
-                """
+
             if 'time' not in poses_df.columns:
                 raise ValueError(f'{file_path} does not have time column. Necessary for compuing sampling rate')
             sampling_rate = round((poses_df.shape[0] - 1) / (poses_df['time'].iloc[-1] - poses_df['time'].iloc[0]))
@@ -2647,9 +2594,9 @@ def usr_inputs():
     # opt.subject_osim_model = opt.subject_data_path + '/Scaled_generic_no_arm.osim'
 
     input("Upload .mot files and a .osim file to Colab via \n \
-    1) clicking the folder button on the left side of the window \n \
-    2) upload .mot files by clicking \"Upload to session storage\" button and \n \
-    3) upload .osim file by clicking \"Upload to session storage\" button. \n \
+    1) click the folder button on the left side of the window \n \
+    2) upload .mot files to the default folder (/content/) by clicking \"Upload to session storage\" button and \n \
+    3) upload .osim file to the default folder (/content/) by clicking \"Upload to session storage\" button. \n \
     Please confirm completion and then entering anything ")
 
     file_paths = []
@@ -2665,7 +2612,7 @@ def usr_inputs():
     for root, dirs, files in os.walk(opt.subject_data_path):
         for file in files:
             file_path = os.path.join(root, file)
-            if file.endswith(".osim") and 'example_opensim_model.osim' not in file:
+            if file.endswith(".osim"):
                 osim_paths.append(file_path)
     if len(osim_paths) > 1:
         print(f'Multiple .osim files found.')
@@ -2708,58 +2655,14 @@ def usr_inputs():
 
     return opt
 
-def auto_inputs(trial_path, trial_metadata):
-    opt = parse_opt()
-    # Ensure subject_data_path is a string
-    if not isinstance(trial_path, str):
-        trial_path = str(trial_path)
-    opt.subject_data_path = trial_path
-    opt.geometry_folder = opt.subject_data_path + '/OpenSimData/Model/Geometry/'
 
-    mot_folder = opt.subject_data_path + '/OpenSimData/Kinematics/'
-
-    file_paths = []
-    for file in os.listdir(mot_folder):
-        file_path = os.path.join(mot_folder, file)
-        if file.endswith(".mot") and '_pred___' not in file:
-            file_paths.append(file_path)
-    if len(file_paths) == 0:
-        raise RuntimeError(f'No .mot file found. Upload .mot files to the appropriate trial directory.')
-    opt.file_paths = file_paths
-
-    osim_folder = opt.subject_data_path + "/OpenSimData/Model/"
-
-    osim_paths = []
-    for root, dirs, files in os.walk(osim_folder):
-        for file in files:
-            file_path = os.path.join(root, file)
-            if file.endswith(".osim") and 'example_opensim_model.osim' not in file:
-                osim_paths.append(file_path)
-    if len(osim_paths) > 1:
-        print(f'Multiple .osim files found.')
-        [print(f'{i}: {file_path}') for i, file_path in enumerate(osim_paths)]
-        i_file = int(input(f'Choose the .osim file entering its index (between 0 and {len(osim_paths)-1}): '))
-        opt.subject_osim_model = osim_paths[i_file]
-    elif len(osim_paths) == 0:
-        raise RuntimeError(f'No .osim file found. Upload the .osim file to the appropriate trial directory.')
-    else:
-        opt.subject_osim_model = osim_paths[0]
-
-    opt.height_m = trial_metadata["height_m"]
-
-    opt.weight_kg = trial_metadata["mass_kg"]
-
-    opt.treadmill_speed = 1.15
-
-    return opt
-
-def predict_grf_and_kinematics(opt, trial_output_path):
+def predict_grf(opt):
     refinement_model = BaselineModel(opt, TransformerEncoderArchitecture)
     dataset = MotionDataset(opt, normalizer=refinement_model.normalizer)
     diffusion_model_for_filling = None
     filling_method = DiffusionFilling()
-    for i_trial in range(len(dataset.trials)):
-        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1, opt=opt)
+    for i, i_trial in enumerate(range(len(dataset.trials))):
+        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1)
         if len(windows) == 0:
             continue
 
@@ -2768,7 +2671,7 @@ def predict_grf_and_kinematics(opt, trial_output_path):
                   f'\nGenerating missing kinematics for {dataset.file_names[i_trial]}')
             if diffusion_model_for_filling is None:
                 diffusion_model_for_filling, _ = load_diffusion_model(opt)
-            windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling, opt)
+            windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling)
         else:
             windows_reconstructed = windows
 
@@ -2798,132 +2701,11 @@ def predict_grf_and_kinematics(opt, trial_output_path):
         results_pred[:, -6:-3] = results_pred[:, -6:-3] * opt.weight_kg  # convert to N
         df = pd.DataFrame(results_pred, columns=opt.osim_dof_columns)
 
-        trial_save_path = f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.mot'
-        df.to_csv(f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.csv', index=False)
-        #convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
-        convertDfToKinematicsMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
-    
+        trial_save_path = f'{dataset.file_names[i_trial][:-4]}_pred___.mot'
+        convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
+        df.to_csv(f"{i}" + "output.csv")
 
 
-def predict_grf(opt, trial_output_path):
-    refinement_model = BaselineModel(opt, TransformerEncoderArchitecture)
-    dataset = MotionDataset(opt, normalizer=refinement_model.normalizer)
-    diffusion_model_for_filling = None
-    filling_method = DiffusionFilling()
-    for i_trial in range(len(dataset.trials)):
-        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1, opt=opt)
-        if len(windows) == 0:
-            continue
-
-        if len(windows[0].missing_col) > 0:
-            print(f'File {dataset.file_names[i_trial]} do not have {windows[0].missing_col}. '
-                  f'\nGenerating missing kinematics for {dataset.file_names[i_trial]}')
-            if diffusion_model_for_filling is None:
-                diffusion_model_for_filling, _ = load_diffusion_model(opt)
-            windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling, opt)
-        else:
-            windows_reconstructed = windows
-
-        state_pred_list = []
-        print(f'Running GaitDynamics on file {dataset.file_names[i_trial]} for external force prediction.')
-        for i_win in range(0, len(windows), opt.batch_size_inference):
-            state_true = torch.stack([win.pose for win in windows_reconstructed[i_win:i_win+opt.batch_size_inference]])
-            masks = torch.stack([win.mask for win in windows_reconstructed[i_win:i_win+opt.batch_size_inference]])
-
-            state_pred_list_batch = refinement_model.eval_loop(opt, state_true, masks, num_of_generation_per_window=1)[0]
-            state_pred_list.append(state_pred_list_batch)
-
-        state_pred = torch.cat(state_pred_list, dim=0)
-        trial_len = dataset.trials[i_trial].converted_pose.shape[0]
-
-        results_pred, _ = convert_overlapped_list_to_array(
-            trial_len, state_pred, s_list, e_list)
-
-        height_m_tensor = torch.tensor([windows[0].height_m])
-        results_pred = inverse_convert_addb_state_to_model_input(
-            torch.from_numpy(results_pred).unsqueeze(0), opt.model_states_column_names, opt.treadmill_speed,
-            opt.joints_3d, opt.osim_dof_columns, dataset.trials[i_trial].pos_vec_for_pos_alignment, height_m_tensor)[0].numpy()
-        results_pred = inverse_norm_cops(dataset.skel, results_pred, opt, windows[0].weight_kg, windows[0].height_m)
-        results_pred = inverse_align_moving_direction(results_pred, opt.osim_dof_columns, dataset.rot_mat_trials[i_trial])
-
-        results_pred[:, -12:-9] = results_pred[:, -12:-9] * opt.weight_kg  # convert to N
-        results_pred[:, -6:-3] = results_pred[:, -6:-3] * opt.weight_kg  # convert to N
-        df = pd.DataFrame(results_pred, columns=opt.osim_dof_columns)
-
-        trial_save_path = f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.mot'
-        df.to_csv(f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.csv', index=False)
-        #convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
-        convertDfToKinematicsMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
-
-def inpaint_kinematics_only(opt, trial_output_path):
-    refinement_model = BaselineModel(opt, TransformerEncoderArchitecture)
-    dataset = MotionDataset(opt, normalizer=refinement_model.normalizer)
-    diffusion_model_for_filling = None
-    filling_method = DiffusionFilling()
-    for i_trial in range(len(dataset.trials)):
-        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1, opt=opt)
-        if len(windows) == 0:
-            continue
-
-        if len(windows[0].missing_col) > 0:
-            print(f'File {dataset.file_names[i_trial]} do not have {windows[0].missing_col}. '
-                  f'\nGenerating missing kinematics for {dataset.file_names[i_trial]}')
-            if diffusion_model_for_filling is None:
-                diffusion_model_for_filling, _ = load_diffusion_model(opt)
-            windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling, opt)
-        else:
-            windows_reconstructed = windows
-
-        state_pred_list = []
-        
-"""
-def inpaint_kinematics_only(opt, trial_output_path):
-    refinement_model = BaselineModel(opt, TransformerEncoderArchitecture)
-    dataset = MotionDataset(opt, normalizer=refinement_model.normalizer)
-    diffusion_model_for_filling = None
-    filling_method = DiffusionFilling()
-    inpainted_results = []
-
-    for i_trial in range(len(dataset.trials)):
-        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1, opt=opt)
-        if len(windows) == 0:
-            continue
-
-        # Inpainting step
-        if len(windows[0].missing_col) > 0:
-            print(f'File {dataset.file_names[i_trial]} do not have {windows[0].missing_col}. '
-                  f'\nGenerating missing kinematics for {dataset.file_names[i_trial]}')
-            if diffusion_model_for_filling is None:
-                diffusion_model_for_filling, _ = load_diffusion_model(opt)
-            windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling, opt)
-        else:
-            windows_reconstructed = windows
-
-        # Reconstruct the full trial from overlapping windows
-        state_pred_list = []
-        for i_win in range(0, len(windows), opt.batch_size_inference):
-            state_true = torch.stack([win.pose for win in windows_reconstructed[i_win:i_win+opt.batch_size_inference]])
-            state_pred_list.append(state_true)
-
-        state_pred = torch.cat(state_pred_list, dim=0)
-        trial_len = dataset.trials[i_trial].converted_pose.shape[0]
-
-        # Merge overlapping windows (median)
-        results_pred, _ = convert_overlapped_list_to_array(
-            trial_len, state_pred, s_list, e_list)
-
-        # Convert to DataFrame with appropriate column names
-        df = pd.DataFrame(results_pred, columns=opt.model_states_column_names)
-        inpainted_results.append(df)
-
-        trial_save_path = f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.mot'
-        #convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3))
-"""
-
-
-"""
 if __name__ == '__main__':
-    trial_path = ""
     opt = usr_inputs()
-    inpaint_kinematics(opt)
-"""
+    predict_grf(opt)
