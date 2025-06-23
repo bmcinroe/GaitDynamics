@@ -1199,7 +1199,7 @@ class BaselineModel:
 
 
 def load_diffusion_model(opt):
-    opt.checkpoint = opt.working_folder + "/GaitDynamicsDiffusion.pt" #+ '/GaitDynamics/example_usage/GaitDynamicsDiffusion.pt'
+    opt.checkpoint = opt.working_folder + '/GaitDynamics/example_usage/GaitDynamicsDiffusion.pt'
     #opt.checkpoint = opt.subject_data_path + '/GaitDynamicsDiffusion.pt'
     model = MotionModel(opt)
     model_key = 'diffusion'
@@ -2361,7 +2361,7 @@ def parse_opt():
     opt.working_folder = current_folder
     opt.subject_data_path = current_folder
     opt.geometry_folder = current_folder + '/Geometry/'
-    opt.checkpoint_bl = current_folder + '/GaitDynamicsRefinement.pt'
+    opt.checkpoint_bl = current_folder + '/GaitDynamics/example_usage/GaitDynamicsRefinement.pt'
     return opt
 
 
@@ -2706,7 +2706,11 @@ def auto_inputs(trial_path, trial_metadata):
     return opt
 
 
-def predict_grf(opt):
+def predict_grf(holder, trial_path, trial_output_path):
+    global opt
+
+    opt = auto_inputs(trial_path, [])
+
     refinement_model = BaselineModel(opt, TransformerEncoderArchitecture)
     dataset = MotionDataset(opt, normalizer=refinement_model.normalizer)
     diffusion_model_for_filling = None
@@ -2751,9 +2755,9 @@ def predict_grf(opt):
         results_pred[:, -6:-3] = results_pred[:, -6:-3] * opt.weight_kg  # convert to N
         df = pd.DataFrame(results_pred, columns=opt.osim_dof_columns)
 
-        trial_save_path = f'{dataset.file_names[i_trial][:-4]}_pred___.mot'
+        trial_save_path = f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.mot'
+        df.to_csv(f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.csv', index=False)
         convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
-        df.to_csv(f"{i}" + "output.csv")
 
 
 if __name__ == '__main__':
