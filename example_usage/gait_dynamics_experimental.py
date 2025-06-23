@@ -1199,7 +1199,8 @@ class BaselineModel:
 
 
 def load_diffusion_model(opt):
-    opt.checkpoint = opt.subject_data_path + '/GaitDynamicsDiffusion.pt'
+    opt.checkpoint = opt.working_folder + "/GaitDynamicsDiffusion.pt" #+ '/GaitDynamics/example_usage/GaitDynamicsDiffusion.pt'
+    #opt.checkpoint = opt.subject_data_path + '/GaitDynamicsDiffusion.pt'
     model = MotionModel(opt)
     model_key = 'diffusion'
     return model, model_key
@@ -2357,6 +2358,7 @@ def parse_opt():
     opt = parser.parse_args(args=[])
     set_no_arm_opt(opt)
     current_folder = os.getcwd()
+    opt.working_folder = current_folder
     opt.subject_data_path = current_folder
     opt.geometry_folder = current_folder + '/Geometry/'
     opt.checkpoint_bl = current_folder + '/GaitDynamicsRefinement.pt'
@@ -2655,6 +2657,54 @@ def usr_inputs():
 
     return opt
 
+def auto_inputs(trial_path, trial_metadata):
+    opt = parse_opt()
+    # Ensure subject_data_path is a string
+    if not isinstance(trial_path, str):
+        trial_path = str(trial_path)
+    opt.subject_data_path = trial_path
+    opt.geometry_folder = opt.subject_data_path + '/OpenSimData/Model/Geometry/'
+
+    mot_folder = opt.subject_data_path + '/OpenSimData/Kinematics/'
+
+    file_paths = []
+    for file in os.listdir(mot_folder):
+        file_path = os.path.join(mot_folder, file)
+        if file.endswith(".mot") and '_pred___' not in file:
+            file_paths.append(file_path)
+    if len(file_paths) == 0:
+        raise RuntimeError(f'No .mot file found. Upload .mot files to the appropriate trial directory.')
+    opt.file_paths = file_paths
+
+    osim_folder = opt.subject_data_path + "/OpenSimData/Model/"
+
+    osim_paths = []
+    for root, dirs, files in os.walk(osim_folder):
+        for file in files:
+            file_path = os.path.join(root, file)
+            if file.endswith(".osim") and 'example_opensim_model.osim' not in file:
+                osim_paths.append(file_path)
+    if len(osim_paths) > 1:
+        print(f'Multiple .osim files found.')
+        [print(f'{i}: {file_path}') for i, file_path in enumerate(osim_paths)]
+        i_file = int(input(f'Choose the .osim file entering its index (between 0 and {len(osim_paths)-1}): '))
+        opt.subject_osim_model = osim_paths[i_file]
+    elif len(osim_paths) == 0:
+        raise RuntimeError(f'No .osim file found. Upload the .osim file to the appropriate trial directory.')
+    else:
+        opt.subject_osim_model = osim_paths[0]
+
+    # TODO: set these back to inputs
+    #opt.height_m = trial_metadata["height_m"]
+    opt.height_m = 1.84
+
+    #opt.weight_kg = trial_metadata["mass_kg"]
+    opt.weight_kg = 92.9
+
+    opt.treadmill_speed = 1.15
+
+    return opt
+
 
 def predict_grf(opt):
     refinement_model = BaselineModel(opt, TransformerEncoderArchitecture)
@@ -2707,5 +2757,7 @@ def predict_grf(opt):
 
 
 if __name__ == '__main__':
-    opt = usr_inputs()
+    #opt = usr_inputs()
+    trial_path = "/Users/ben/BalanceData_GaitDynamicsExample/Input/example"
+    opt = auto_inputs(trial_path, [])
     predict_grf(opt)
