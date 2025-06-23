@@ -2520,8 +2520,6 @@ class MotionDataset(Dataset):
             # TODO: replace hardcoded value with robust header parser
             angle_scale = np.pi / 180
 
-            print(poses_df)
-
             # Experimental robust header parser - not working for masked balance data due to white space bug in masking function, try using .strip() method
             """
             with open(file_path) as f:
@@ -2605,6 +2603,7 @@ class MotionDataset(Dataset):
                 print(f'Warning: {file_name} is shorter than 1.5s, skipping.')
                 continue
             if sampling_rate != self.target_sampling_rate:
+                print(f'Resampling {file_name} from {sampling_rate} Hz to {self.target_sampling_rate} Hz')
                 states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
 
             states_df = pd.DataFrame(states, columns=opt.osim_dof_columns)
