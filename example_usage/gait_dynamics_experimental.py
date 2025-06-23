@@ -1221,6 +1221,38 @@ class SinusoidalPosEmb(nn.Module):
         return emb
 
 
+def convertDfToKinematicsMot(df, out_folder, dt, time_column):
+    # TODO: make this flexible by including a dynamic variable for masked columns
+    numFrames = df.shape[0]
+    for key in df.keys():
+        if key == 'TimeStamp':
+            continue
+
+    out_file = open(out_folder, 'w')
+    out_file.write('nColumns=1\n')
+    out_file.write('nRows='+str(numFrames)+'\n')
+    out_file.write('DataType=double\n')
+    out_file.write('version=3\n')
+    out_file.write('OpenSimVersion=4.1\n')
+    out_file.write('endheader\n')
+    out_file.write('time')
+
+    #TODO: make this flexible by including a dynamic variable for masked columns
+    out_file.write('\t' + f'knee_angle_r')
+
+    out_file.write('\n')
+    for i in range(numFrames):
+        out_file.write(str(round(dt * i + time_column[0], 5)))
+
+        out_file.write('\t' + str(df[f'knee_angle_r'][i]))
+
+        out_file.write('\n')
+
+    out_file.close()
+
+    print('Kinematics file exported to ' + out_folder)
+
+
 def convertDfToGRFMot(df, out_folder, dt, time_column):
     numFrames = df.shape[0]
     for key in df.keys():
@@ -2483,10 +2515,48 @@ class MotionDataset(Dataset):
         self.trials, self.file_names, self.rot_mat_trials, self.time_column = [], [], [], []
         for i_file, file_path in enumerate(file_paths):
             model_offsets = get_model_offsets(skel).float()
-            poses_df = pd.read_csv(file_path, sep='\t', skiprows=10)
+            poses_df = pd.read_csv(file_path, sep='\t', skiprows=opt.header_length)
+
+            # TODO: replace hardcoded value with robust header parser
+            angle_scale = np.pi / 180
+
+            print(poses_df)
+
+            # Experimental robust header parser - not working for masked balance data due to white space bug in masking function, try using .strip() method
+            """
             with open(file_path) as f:
-                for _ in range(10):
+                header = f.readline()
+                previous_header = header
+                while "endheader" not in previous_header:
                     header = f.readline()
+                    print("line")
+                    print(header)
+
+
+                    if 'inDegrees' in header:
+                        if 'yes' in header and 'no' not in header:
+                            angle_scale = np.pi / 180
+                        elif 'no' in header and 'yes' not in header:
+                            angle_scale = 1
+                        else:
+                            raise ValueError('No inDegrees keyword in the header, cannot determine the unit of angles. '
+                                            'Here is an example header: \nCoordinates\nversion=1\nnRows=1380'
+                                            '\nnColumns=26\ninDegrees=yes\n')
+                        break
+                    previous_header = header
+                    continue
+            """
+
+
+            # Header parser from colab example
+            """        
+            with open(file_path) as f:
+                for _ in range(opt.header_length):
+                    header = f.readline()
+                    print("line")
+                    print("____________________")
+                    print(header)
+                    print("____________________")
                     if 'inDegrees' in header:
                         if 'yes' in header and 'no' not in header:
                             angle_scale = np.pi / 180
@@ -2497,6 +2567,7 @@ class MotionDataset(Dataset):
                                              'Here is an example header: \nCoordinates\nversion=1\nnRows=1380'
                                              '\nnColumns=26\ninDegrees=yes\n')
                         break
+            """
 
             if 'time' not in poses_df.columns:
                 raise ValueError(f'{file_path} does not have time column. Necessary for compuing sampling rate')
@@ -2695,21 +2766,25 @@ def auto_inputs(trial_path, trial_metadata):
         opt.subject_osim_model = osim_paths[0]
 
     # TODO: set these back to inputs
-    #opt.height_m = trial_metadata["height_m"]
-    opt.height_m = 1.84
+    opt.height_m = trial_metadata["height_m"]
+    #opt.height_m = 1.84
 
-    #opt.weight_kg = trial_metadata["mass_kg"]
-    opt.weight_kg = 92.9
+    opt.weight_kg = trial_metadata["mass_kg"]
+    #opt.weight_kg = 92.9
 
-    opt.treadmill_speed = 1.15
+    opt.treadmill_speed = 0
+    #opt.treadmill_speed = 1.15
+
+    #opt.header_length = 12 
+    opt.header_length = 10
 
     return opt
 
 
-def predict_grf(holder, trial_path, trial_output_path):
+def predict_grf(trial_metadata, trial_path, trial_output_path):
     global opt
 
-    opt = auto_inputs(trial_path, [])
+    opt = auto_inputs(trial_path, trial_metadata)
 
     refinement_model = BaselineModel(opt, TransformerEncoderArchitecture)
     dataset = MotionDataset(opt, normalizer=refinement_model.normalizer)
@@ -2757,11 +2832,13 @@ def predict_grf(holder, trial_path, trial_output_path):
 
         trial_save_path = f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.mot'
         df.to_csv(f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.csv', index=False)
-        convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
+        #convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
+        convertDfToKinematicsMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
 
-
+"""
 if __name__ == '__main__':
     #opt = usr_inputs()
     trial_path = "/Users/ben/BalanceData_GaitDynamicsExample/Input/example"
     opt = auto_inputs(trial_path, [])
     predict_grf(opt)
+"""
