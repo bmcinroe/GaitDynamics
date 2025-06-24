@@ -2774,8 +2774,8 @@ def auto_inputs(trial_path, trial_metadata):
     opt.treadmill_speed = 0
     #opt.treadmill_speed = 1.15
 
-    #opt.header_length = 12 
-    opt.header_length = 10
+    opt.header_length = 12 
+    #opt.header_length = 10
 
     return opt
 
@@ -2830,7 +2830,7 @@ def predict_grf(trial_metadata, trial_path, trial_output_path):
         df = pd.DataFrame(results_pred, columns=opt.osim_dof_columns)
 
         trial_save_path = f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.mot'
-        df.to_csv(f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.csv', index=False)
+        #df.to_csv(f'{trial_output_path}/{dataset.file_names[i_trial][:-4]}_pred___.csv', index=False)
         #convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
         convertDfToKinematicsMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
 
