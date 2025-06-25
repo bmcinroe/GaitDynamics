@@ -1252,6 +1252,45 @@ def convertDfToKinematicsMot(df, out_folder, dt, time_column):
 
     print('Kinematics file exported to ' + out_folder)
 
+def convertDfToKinematicsMot_experimental(df, out_folder, dt, time_column, masked_columns):
+    """
+    INPUT: df: pandas dataframe containing the data to be converted to a .mot file
+           out_folder: path to the directory where the .mot file will be saved
+           dt: time step of the data
+           time_column: time column of the data
+           masked_columns: list of string identifiers for columns to be masked
+    OUTPUT: .mot file saved to out_folder
+    """
+    numFrames = df.shape[0]
+    for key in df.keys():
+        if key == 'TimeStamp':
+            continue
+
+    out_file = open(out_folder, 'w')
+    out_file.write('nColumns='+str(len(masked_columns))+'\n')
+    out_file.write('nRows='+str(numFrames)+'\n')
+    out_file.write('DataType=double\n')
+    out_file.write('version=3\n')
+    out_file.write('OpenSimVersion=4.1\n')
+    out_file.write('endheader\n')
+    out_file.write('time')
+
+    for column in masked_columns:
+        out_file.write('\t' + column)
+
+    out_file.write('\n')
+    for i in range(numFrames):
+        out_file.write(str(round(dt * i + time_column[0], 5)))
+
+        for column in masked_columns:
+            out_file.write('\t' + str(df[column][i]))
+
+        out_file.write('\n')
+
+    out_file.close()
+
+    print('Kinematics file exported to ' + out_folder)
+
 
 def convertDfToGRFMot(df, out_folder, dt, time_column):
     numFrames = df.shape[0]
